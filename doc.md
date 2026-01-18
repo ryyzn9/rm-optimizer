@@ -59,136 +59,567 @@ RM-Optimizer is a framework for analyzing reward models used in Reinforcement Le
 
 ## 2. Theoretical Foundations
 
+This section provides the mathematical background for understanding reward model optimization, loss landscape geometry, and RL coupling dynamics.
+
 ### 2.1 Reward Model Training
 
-#### Bradley-Terry Loss
+#### 2.1.1 The Bradley-Terry Model
 
-The standard objective for pairwise preference learning:
+The Bradley-Terry model is a probabilistic framework for pairwise comparisons, originally developed for ranking in sports tournaments [Bradley & Terry, 1952].
+
+**Core Assumption:** Each item `i` has a latent "strength" parameter `θ_i`. The probability that item `i` beats item `j` is:
 
 ```
-L(θ) = -E[log σ(r_θ(x, y_w) - r_θ(x, y_l))]
+P(i > j) = exp(θ_i) / (exp(θ_i) + exp(θ_j)) = σ(θ_i - θ_j)
+```
+
+Where `σ(x) = 1/(1 + exp(-x))` is the sigmoid function.
+
+#### 2.1.2 Application to Reward Models
+
+For reward models, we parameterize the strength as a neural network `r_θ(x, y)`:
+
+```
+P(y_w > y_l | x) = σ(r_θ(x, y_w) - r_θ(x, y_l))
 ```
 
 Where:
-- `r_θ(x, y)` is the reward for response `y` given prompt `x`
-- `y_w` is the preferred (chosen) response
-- `y_l` is the dispreferred (rejected) response
-- `σ` is the sigmoid function
+- `x` = prompt/context
+- `y_w` = preferred ("winning") response  
+- `y_l` = dispreferred ("losing") response
+- `r_θ` = reward model with parameters θ
 
-**Implementation:**
+#### 2.1.3 Maximum Likelihood Estimation
 
+Given a dataset of N preference pairs `D = {(x_i, y_w^i, y_l^i)}`:
+
+**Log-likelihood:**
+```
+ℓ(θ) = Σᵢ log P(y_w^i > y_l^i | x_i)
+     = Σᵢ log σ(r_θ(x_i, y_w^i) - r_θ(x_i, y_l^i))
+```
+
+**Negative log-likelihood (loss):**
+```
+L(θ) = -1/N Σᵢ log σ(r_θ(x_i, y_w^i) - r_θ(x_i, y_l^i))
+```
+
+This is equivalent to binary cross-entropy where:
+- Positive class: margin > 0 (chosen beats rejected)
+- The margin `m = r(x, y_w) - r(x, y_l)` is the logit
+
+#### 2.1.4 Numerical Stability
+
+Direct computation of `log(σ(x))` is unstable for large negative x. We use:
+
+```
+log σ(x) = -log(1 + exp(-x)) = -softplus(-x)
+```
+
+**PyTorch implementation:**
 ```python
-def compute_loss(self, chosen_ids, chosen_mask, rejected_ids, rejected_mask):
-    # Forward pass for both responses
-    reward_chosen = self.forward(chosen_ids, chosen_mask)
-    reward_rejected = self.forward(rejected_ids, rejected_mask)
-    
-    # Bradley-Terry loss: -log(sigmoid(margin))
-    margin = reward_chosen - reward_rejected
-    loss = -torch.nn.functional.logsigmoid(margin).mean()
-    
-    return loss
+loss = -F.logsigmoid(margin).mean()  # Numerically stable
+# NOT: loss = -torch.log(torch.sigmoid(margin)).mean()  # Unstable!
 ```
 
-### 2.2 Hessian Analysis
+#### 2.1.5 Margin Distribution
 
-#### Why Hessian Matters
+The reward margin `m = r(y_w) - r(y_l)` has important properties:
 
-The Hessian matrix `H = ∇²L(θ)` captures the curvature of the loss landscape:
+| Margin Range | Interpretation |
+|--------------|----------------|
+| m >> 0 | High confidence, clear preference |
+| m ≈ 0 | Uncertain, ambiguous comparison |
+| m < 0 | Model disagrees with label (possible error) |
 
-- **Large eigenvalues** → Sharp minimum → Poor generalization
-- **Small eigenvalues** → Flat minimum → Better generalization
-- **Condition number** `κ = λ_max / λ_min` → Optimization difficulty
-
-#### Efficient Computation
-
-For a 7B parameter model, storing the full Hessian requires:
-```
-7B × 7B × 4 bytes = 196 Petabytes  ❌ Infeasible
-```
-
-**Solution: Hessian-Vector Products (HVP)**
-
-Compute `H·v` without forming `H` using automatic differentiation:
-
-```python
-def hessian_vector_product(loss_fn, params, vector):
-    # Step 1: Compute gradients
-    grads = torch.autograd.grad(loss_fn, params, create_graph=True)
-    
-    # Step 2: Dot product with vector
-    grad_dot_v = sum((g * v).sum() for g, v in zip(grads, vector))
-    
-    # Step 3: Second derivative = H·v
-    hvp = torch.autograd.grad(grad_dot_v, params)
-    
-    return hvp
-```
-
-Memory: `O(d)` instead of `O(d²)`
-
-#### Power Iteration for Eigenvalues
-
-```
-Algorithm: Power Iteration
-─────────────────────────────
-Input: Hessian H, iterations T
-Output: Top eigenvalue λ, eigenvector v
-
-1. Initialize random v, normalize ||v|| = 1
-2. For t = 1 to T:
-   a. w = H·v  (via HVP)
-   b. v = w / ||w||
-3. λ = v^T H v
-4. Return λ, v
-```
-
-### 2.3 RL Coupling Theory
-
-#### Policy Gradient Variance
-
-In RLHF, the policy gradient is:
-```
-∇J(φ) = E[r_θ(x,y) · ∇log π_φ(y|x)]
-```
-
-The variance of this gradient is bounded by:
-```
-Var[∇J] ≤ Var[r_θ] × E[||∇log π||²]
-```
-
-**Implication:** High reward model variance → Unstable RL training
-
-#### Reward Over-Optimization (Goodhart's Law)
-
-As the policy optimizes, it generates out-of-distribution text:
-- Reward model becomes poorly calibrated
-- Policy exploits reward model weaknesses ("reward hacking")
-
-**Detection via Ensemble Disagreement:**
-```
-σ²_ensemble(x, y) = Var[r_i(x, y)] across ensemble
-```
-
-High disagreement = OOD region = Stop RL training
-
-### 2.4 Active Learning
-
-#### Information-Theoretic Sample Selection
-
-Given:
-- Ensemble of K reward models: `{r_1, ..., r_K}`
-- Pool of unlabeled pairs: `U = {(x, y_a, y_b)}`
-- Labeling budget: `B`
-
-**Acquisition Function (Uncertainty Sampling):**
-```
-score(x, y_a, y_b) = Var[r_i(x, y_a) - r_i(x, y_b)]
-```
-
-Select top-B samples with highest uncertainty.
+**Optimal margin:** After training, E[m] should be positive. Very large margins (|m| > 5) may indicate overconfidence.
 
 ---
+
+### 2.2 Loss Landscape Geometry
+
+#### 2.2.1 The Hessian Matrix
+
+The Hessian `H = ∇²L(θ)` is the matrix of second-order partial derivatives:
+
+```
+H_ij = ∂²L / ∂θ_i ∂θ_j
+```
+
+For a model with d parameters, H is a d×d symmetric matrix.
+
+#### 2.2.2 Eigendecomposition and Interpretation
+
+The Hessian can be decomposed as:
+
+```
+H = V Λ V^T
+```
+
+Where:
+- `Λ = diag(λ_1, ..., λ_d)` = eigenvalues (sorted: λ_1 ≥ λ_2 ≥ ... ≥ λ_d)
+- `V = [v_1, ..., v_d]` = eigenvectors (orthonormal)
+
+**Interpretation of eigenvalues:**
+
+| Eigenvalue | Meaning |
+|------------|---------|
+| λ_i > 0 | Positive curvature (local minimum direction) |
+| λ_i < 0 | Negative curvature (saddle point direction) |
+| λ_i ≈ 0 | Flat direction (degenerate) |
+| λ_1 (largest) | Sharpest direction of curvature |
+| λ_d (smallest) | Flattest direction |
+
+#### 2.2.3 Key Hessian Metrics
+
+**1. Condition Number:**
+```
+κ = λ_max / λ_min
+```
+- Measures optimization difficulty
+- High κ → Ill-conditioned → Slow convergence
+- Typical values: 10² to 10⁶ for neural networks
+
+**2. Trace (Sum of Eigenvalues):**
+```
+tr(H) = Σᵢ λᵢ = Σᵢ ∂²L/∂θᵢ²
+```
+- Average curvature across all directions
+- Efficiently estimated via Hutchinson's method
+
+**3. Effective Rank:**
+```
+r_eff = (Σᵢ λᵢ)² / Σᵢ λᵢ²
+```
+- Measures "intrinsic dimensionality" of the problem
+- Low r_eff → Loss varies along few directions
+
+**4. Sharpness (Keskar et al., 2017):**
+```
+sharpness = (max_{||ε||≤ρ} L(θ + ε) - L(θ)) / (1 + L(θ))
+```
+- Measures sensitivity to parameter perturbations
+- Related to λ_max for small ρ
+
+#### 2.2.4 Flatness and Generalization
+
+**Key hypothesis (Hochreiter & Schmidhuber, 1997; Keskar et al., 2017):**
+
+> Flat minima generalize better than sharp minima.
+
+**Intuition:** 
+- Flat minimum: Small weight perturbations don't change loss much
+- Sharp minimum: Sensitive to exact weight values
+- Test data causes implicit weight perturbation → Flat minima are robust
+
+**PAC-Bayesian bound (Neyshabur et al., 2017):**
+```
+L_test ≤ L_train + O(√(tr(H) / n))
+```
+
+Where n = training samples. Lower trace → Tighter bound → Better generalization.
+
+#### 2.2.5 Hessian-Vector Products (HVP)
+
+For large models, we cannot store the full Hessian. Instead, we compute products `H·v`:
+
+**Mathematical identity:**
+```
+H·v = ∂/∂θ (∇L · v) = lim_{ε→0} (∇L(θ + εv) - ∇L(θ)) / ε
+```
+
+**Algorithmic approach (Pearlmutter, 1994):**
+1. Compute gradient: g = ∇L(θ)
+2. Compute scalar: s = g^T v = Σᵢ gᵢvᵢ
+3. Compute gradient of scalar: ∇s = H·v
+
+**Complexity:** O(d) time and space (same as one gradient computation)
+
+#### 2.2.6 Power Iteration for Top Eigenvalues
+
+```
+Algorithm: Power Iteration with Deflation
+────────────────────────────────────────────
+Input: H (via HVP), number of eigenvalues k, tolerance ε
+Output: Top k eigenvalues and eigenvectors
+
+eigenvalues = []
+eigenvectors = []
+
+for i = 1 to k:
+    # Initialize random unit vector
+    v ← random unit vector in ℝ^d
+    
+    # Power iteration
+    for t = 1 to max_iterations:
+        w = H·v  (via HVP)
+        
+        # Deflate: remove components from previous eigenvectors
+        for j = 1 to i-1:
+            w = w - (w·eigenvectors[j]) * eigenvectors[j]
+        
+        v_new = w / ||w||
+        
+        if ||v_new - v|| < ε:
+            break
+        v = v_new
+    
+    # Compute eigenvalue via Rayleigh quotient
+    λ = v^T H v = v · (H·v)
+    
+    eigenvalues.append(λ)
+    eigenvectors.append(v)
+
+return eigenvalues, eigenvectors
+```
+
+**Convergence rate:** O((λ_1/λ_2)^t) - faster when eigenvalue gap is large.
+
+#### 2.2.7 Hutchinson's Trace Estimator
+
+**Problem:** Computing tr(H) = Σᵢ H_ii is expensive (need all diagonal elements).
+
+**Solution (Hutchinson, 1989):** Stochastic estimation using random vectors.
+
+```
+tr(H) = E_z[z^T H z]   where z ~ Rademacher or N(0, I)
+```
+
+**Algorithm:**
+```
+trace_estimate = 0
+for i = 1 to m:
+    z ← random vector (Rademacher: ±1 with prob 0.5)
+    trace_estimate += z^T (H·z) / m
+return trace_estimate
+```
+
+**Variance:** O(2·tr(H²)/m) for Rademacher vectors.
+
+---
+
+### 2.3 Optimizer Theory
+
+#### 2.3.1 Connection to Hessian
+
+Different optimizers interact with the Hessian differently:
+
+| Optimizer | Update Rule | Hessian Interaction |
+|-----------|-------------|---------------------|
+| SGD | θ ← θ - α∇L | Ignores curvature |
+| SGD+Momentum | v ← βv + ∇L; θ ← θ - αv | Smooths noisy gradients |
+| Adam | Adaptive per-param LR | Approximates diagonal H⁻¹ |
+| Natural Gradient | θ ← θ - αF⁻¹∇L | Uses Fisher (≈ Hessian) |
+| Newton | θ ← θ - αH⁻¹∇L | Perfect curvature correction |
+| Muon | θ ← θ - α·NS(∇L) | Orthogonalizes gradient |
+
+#### 2.3.2 Why Adam Works
+
+Adam approximates the inverse Hessian diagonal:
+
+```
+m_t = β₁ m_{t-1} + (1-β₁) g_t           # First moment
+v_t = β₂ v_{t-1} + (1-β₂) g_t²          # Second moment (≈ diag(H))
+θ_{t+1} = θ_t - α · m_t / (√v_t + ε)    # Update (≈ H⁻¹ · g)
+```
+
+**Key insight:** v_t ≈ E[g²] ≈ diag(H) near minimum, so Adam performs approximate Newton updates.
+
+#### 2.3.3 Sharpness-Aware Minimization (SAM)
+
+SAM explicitly seeks flat minima:
+
+```
+θ_{t+1} = θ_t - α∇L(θ_t + ρ · ∇L(θ_t)/||∇L(θ_t)||)
+```
+
+**Interpretation:**
+1. Compute gradient at current point
+2. Move ρ in gradient direction (toward loss increase)
+3. Compute gradient at perturbed point
+4. Update using this "worst-case" gradient
+
+**Effect:** Reduces λ_max, finds flatter minima.
+
+#### 2.3.4 Muon Optimizer
+
+Muon uses Newton-Schulz iteration to orthogonalize the gradient:
+
+```
+# Newton-Schulz iteration (converges to orthogonal matrix)
+G = gradient matrix
+for i = 1 to 5:
+    G = 1.5·G - 0.5·G·G^T·G
+    
+update = G  # Now G·G^T ≈ I
+```
+
+**Properties:**
+- Balances gradient magnitudes across dimensions
+- Resists sharp directions
+- Works especially well for transformers
+
+---
+
+### 2.4 RL Coupling Theory
+
+#### 2.4.1 RLHF Objective
+
+Given a reward model r_θ, the RL objective is:
+
+```
+J(φ) = E_{x~D, y~π_φ}[r_θ(x, y)] - β · KL(π_φ || π_ref)
+```
+
+Where:
+- `π_φ` = policy being optimized
+- `π_ref` = reference policy (usually SFT model)
+- `β` = KL penalty coefficient
+
+#### 2.4.2 Policy Gradient and Variance
+
+The policy gradient is:
+
+```
+∇_φ J = E_{x,y}[(r_θ(x,y) - b(x)) · ∇_φ log π_φ(y|x)]
+```
+
+Where b(x) is a baseline (often the value function).
+
+**Variance decomposition:**
+```
+Var[∇J] = E[||∇log π||²] · Var[r - b] + E[(r - b)²] · Var[∇log π]
+```
+
+**Key insight:** High reward variance → High gradient variance → Unstable training
+
+#### 2.4.3 The Reward Model as Training Signal
+
+Think of r_θ as a "learned loss function" for the policy:
+
+| Property | Good Reward Model | Bad Reward Model |
+|----------|-------------------|------------------|
+| Accuracy | Correctly ranks preferences | Random rankings |
+| Calibration | P(chosen) ≈ σ(margin) | Overconfident/underconfident |
+| Coverage | Good on policy distribution | Only good on SFT distribution |
+| Smoothness | Smooth reward surface | Discontinuous, hackable |
+
+#### 2.4.4 Reward Hacking and Goodhart's Law
+
+**Goodhart's Law:** "When a measure becomes a target, it ceases to be a good measure."
+
+In RLHF:
+1. Policy optimizes for high r_θ(x, y)
+2. Policy generates out-of-distribution (OOD) responses
+3. Reward model is unreliable on OOD data
+4. Policy finds "reward hacks" (high reward, low quality)
+
+**Examples of reward hacking:**
+- Excessive length (if longer = higher reward on training data)
+- Repetitive patterns
+- Sycophantic responses ("You're absolutely right!")
+
+#### 2.4.5 Detecting OOD via Ensemble Disagreement
+
+**Key idea:** Train K reward models with different random seeds. Disagreement indicates epistemic uncertainty.
+
+```
+Uncertainty(x, y) = Var_{i=1}^K[r_i(x, y)]
+                  = E[r_i²] - E[r_i]²
+```
+
+**Interpretation:**
+- Low uncertainty: All models agree → In-distribution
+- High uncertainty: Models disagree → OOD (unreliable)
+
+**Ensemble agreement threshold:**
+```
+if Uncertainty(x, y) > τ:
+    stop_rl()  # Policy has gone OOD
+```
+
+#### 2.4.6 KL Divergence as Regularization
+
+The KL penalty keeps the policy close to π_ref:
+
+```
+KL(π_φ || π_ref) = E_{y~π_φ}[log π_φ(y|x) - log π_ref(y|x)]
+```
+
+**Trade-off:**
+- Higher β → More conservative policy → Less reward hacking
+- Lower β → More exploratory → Higher risk of reward hacking
+
+---
+
+### 2.5 Calibration Theory
+
+#### 2.5.1 What is Calibration?
+
+A model is calibrated if its predicted probabilities match empirical frequencies:
+
+```
+P(y_w > y_l | σ(margin) = p) = p   for all p ∈ [0, 1]
+```
+
+**Example:**
+- Model predicts 70% confidence in 1000 comparisons
+- If calibrated, ~700 predictions should be correct
+
+#### 2.5.2 Expected Calibration Error (ECE)
+
+Bin predictions by confidence and measure accuracy:
+
+```
+ECE = Σ_b (|B_b| / n) · |acc(B_b) - conf(B_b)|
+```
+
+Where:
+- B_b = samples in bin b
+- acc(B_b) = accuracy in bin
+- conf(B_b) = average confidence in bin
+
+**Interpretation:**
+- ECE = 0: Perfect calibration
+- ECE = 0.1: 10% average deviation from perfect calibration
+- ECE > 0.15: Poorly calibrated
+
+#### 2.5.3 Why Calibration Matters for RL
+
+Uncalibrated rewards cause problems:
+
+| Calibration Issue | Effect on RL |
+|-------------------|--------------|
+| Overconfident | Policy trusts wrong predictions |
+| Underconfident | Policy ignores correct predictions |
+| Miscalibrated OOD | Reward hacking undetected |
+
+#### 2.5.4 Temperature Scaling
+
+Post-hoc calibration using a single parameter T:
+
+```
+calibrated_prob = σ(margin / T)
+```
+
+**Finding T:** Minimize negative log-likelihood on validation set:
+```
+T* = argmin_T Σᵢ [-log σ(margin_i / T)]
+```
+
+**Typical values:** T ∈ [0.5, 2.0]. T > 1 reduces overconfidence.
+
+---
+
+### 2.6 Active Learning Theory
+
+#### 2.6.1 The Active Learning Problem
+
+**Setting:**
+- Large pool of unlabeled pairs: U = {(x, y_a, y_b)}
+- Labeling budget: B
+- Goal: Select B samples to maximize model improvement
+
+**Key question:** Which samples are most informative?
+
+#### 2.6.2 Information-Theoretic View
+
+**Optimal acquisition (in theory):**
+```
+select = argmax_{S ⊂ U, |S|=B} I(θ; labels(S))
+```
+
+Where I(θ; labels(S)) is the mutual information between model parameters and labels of selected samples.
+
+**In practice:** This is intractable. We use proxies.
+
+#### 2.6.3 Uncertainty Sampling
+
+**Intuition:** Samples where the model is uncertain are most informative.
+
+```
+score(x, y_a, y_b) = H(P(y_a > y_b | x))  # Entropy of prediction
+                   = -p·log(p) - (1-p)·log(1-p)
+```
+
+Maximum entropy = 1 bit when p = 0.5 (maximum uncertainty).
+
+**With ensemble:**
+```
+score = Var_{models}[margin]
+```
+
+#### 2.6.4 Expected Model Change
+
+**Intuition:** Samples that would cause large gradient updates are informative.
+
+```
+score = E_{label}[||∇L(θ; x, y_a, y_b, label)||²]
+```
+
+Average over both possible labels (weighted by current prediction).
+
+#### 2.6.5 Query-by-Committee
+
+**Intuition:** Samples where ensemble members disagree most.
+
+```
+Committee of K models predicts preference
+score = Entropy(vote distribution)
+```
+
+If 3 models vote A and 2 vote B:
+```
+p_A = 3/5, p_B = 2/5
+score = -0.6·log(0.6) - 0.4·log(0.4) = 0.97 bits
+```
+
+#### 2.6.6 Diversity Sampling
+
+Pure uncertainty sampling can select redundant samples. Add diversity:
+
+```
+selected = greedy_diverse_selection(pool, scores, k)
+
+# DPP (Determinantal Point Process) style:
+# Select set S that maximizes: det(K_S) where K is similarity kernel
+```
+
+---
+
+### 2.7 Generalization Bounds
+
+#### 2.7.1 PAC-Bayes Generalization
+
+For neural networks, the PAC-Bayes bound relates Hessian to generalization:
+
+```
+L_test ≤ L_train + √(KL(posterior || prior) / (2n))
+```
+
+For Gaussian posterior around θ*:
+```
+KL = (1/2) · tr(H · Σ_prior⁻¹) + (θ* - μ_prior)^T Σ_prior⁻¹ (θ* - μ_prior)
+```
+
+**Implication:** Lower tr(H) → Tighter bound → Better generalization
+
+#### 2.7.2 Flat Minima and Noise Robustness
+
+Consider adding noise to weights:
+```
+L(θ + ε) ≈ L(θ) + ε^T ∇L + (1/2) ε^T H ε
+```
+
+For ε ~ N(0, σ²I):
+```
+E[L(θ + ε)] ≈ L(θ) + (σ²/2) · tr(H)
+```
+
+**Flat minimum:** Low tr(H) → Robust to noise → Better test performance
+
+---
+
 
 ## 3. Project Architecture
 
