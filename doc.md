@@ -1482,24 +1482,444 @@ print(prof.key_averages().table())
 
 ---
 
-## Appendix: File Reference
+## 13. Models Reference
+
+### 13.1 Supported Base Models
+
+Models are **automatically downloaded** from HuggingFace on first use.
+
+| Model | Size | Memory (BF16) | HuggingFace ID | Best For |
+|-------|------|---------------|----------------|----------|
+| DeBERTa-v3-base | 86M | ~200MB | `microsoft/deberta-v3-base` | Fast experiments |
+| DeBERTa-v3-large | 355M | ~700MB | `microsoft/deberta-v3-large` | Recommended default |
+| RoBERTa-large | 355M | ~700MB | `roberta-large` | Alternative encoder |
+| Llama-2-7B | 7B | ~14GB | `meta-llama/Llama-2-7b-hf` | High capacity |
+| Mistral-7B | 7B | ~14GB | `mistralai/Mistral-7B-v0.1` | Efficient 7B |
+| Llama-2-13B | 13B | ~26GB | `meta-llama/Llama-2-13b-hf` | Maximum capacity |
+
+### 13.2 Model Download & Caching
+
+```python
+from rm_optimizer.core import BradleyTerryRM
+
+# Automatic download on first use
+model = BradleyTerryRM("microsoft/deberta-v3-large")
+# Downloads to: ~/.cache/huggingface/hub/
+
+# Pre-download without training
+from transformers import AutoModel, AutoTokenizer
+AutoModel.from_pretrained("microsoft/deberta-v3-large")
+AutoTokenizer.from_pretrained("microsoft/deberta-v3-large")
+```
+
+### 13.3 Cache Locations
+
+| OS | Path |
+|----|------|
+| Linux | `~/.cache/huggingface/hub/` |
+| macOS | `~/.cache/huggingface/hub/` |
+| Windows | `C:\Users\<you>\.cache\huggingface\hub\` |
+
+### 13.4 Using Custom Models
+
+```python
+# Any HuggingFace model works
+model = BradleyTerryRM("your-org/your-model")
+
+# Local model path
+model = BradleyTerryRM("/path/to/local/model")
+
+# Private models (requires HF login)
+from huggingface_hub import login
+login(token="hf_...")
+model = BradleyTerryRM("your-private-org/model")
+```
+
+---
+
+## 14. Datasets Reference
+
+### 14.1 Supported Datasets
+
+| Dataset | Pairs | Source | Quality | Use Case |
+|---------|-------|--------|---------|----------|
+| **Anthropic HH-RLHF** | 170K | Anthropic | High | Helpfulness + Harmlessness |
+| **UltraFeedback** | 64K | OpenBMB | Very High | GPT-4 annotated |
+| **Stanford SHP** | 385K | Stanford | Medium | Reddit preferences |
+| **NVIDIA HelpSteer** | 37K | NVIDIA | High | Steering behaviors |
+
+### 14.2 Download Datasets
+
+```bash
+# CLI commands
+rm-opt download hh-rlhf                    # Full dataset
+rm-opt download hh-rlhf -n 10000           # 10K samples
+rm-opt download ultrafeedback -n 5000      # 5K samples
+rm-opt download shp -n 20000               # 20K samples
+```
+
+```python
+# Python API
+from rm_optimizer.core import download_dataset, list_datasets
+
+# Show all available
+list_datasets()
+
+# Download with options
+path = download_dataset(
+    name="hh-rlhf",
+    output_dir="data",
+    max_samples=10000,
+    format="parquet"  # or "json", "csv"
+)
+print(f"Saved to: {path}")
+```
+
+### 14.3 Data Format
+
+Your data must have these columns:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Required Columns                                    │
+├─────────────────────────────────────────────────────┤
+│  prompt     │ str  │ Input question/instruction     │
+│  chosen     │ str  │ Preferred (better) response    │
+│  rejected   │ str  │ Dispreferred (worse) response  │
+├─────────────────────────────────────────────────────┤
+│  Optional Columns                                    │
+├─────────────────────────────────────────────────────┤
+│  margin     │ float│ Strength of preference (0-1)   │
+│  source     │ str  │ Data source identifier         │
+└─────────────────────────────────────────────────────┘
+```
+
+### 14.4 Create Custom Dataset
+
+```python
+import pandas as pd
+
+# From list of dicts
+data = [
+    {
+        "prompt": "What is 2+2?",
+        "chosen": "The answer is 4.",
+        "rejected": "The answer is 5."
+    },
+    {
+        "prompt": "Explain gravity.",
+        "chosen": "Gravity is the force that attracts objects with mass...",
+        "rejected": "Gravity makes things fall down sometimes."
+    }
+]
+
+df = pd.DataFrame(data)
+df.to_parquet("data/my_preferences.parquet")
+
+# Train on custom data
+# rm-opt train --data data/my_preferences.parquet
+```
+
+### 14.5 Load & Inspect Data
+
+```python
+from rm_optimizer.core import load_preference_data
+
+# Load data
+df = load_preference_data("data/hh-rlhf_train_10k.parquet")
+
+# Inspect
+print(f"Samples: {len(df)}")
+print(f"Columns: {list(df.columns)}")
+print(df.head())
+
+# Check lengths
+df['prompt_len'] = df['prompt'].str.len()
+df['chosen_len'] = df['chosen'].str.len()
+print(df[['prompt_len', 'chosen_len']].describe())
+```
+
+---
+
+## 15. Advanced Usage
+
+### 15.1 Custom Optimizer Integration
+
+```python
+# Add a new optimizer
+class CustomOptimizer(torch.optim.Optimizer):
+    def __init__(self, params, lr=1e-4):
+        defaults = dict(lr=lr)
+        super().__init__(params, defaults)
+    
+    def step(self):
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                p.data.add_(p.grad, alpha=-group['lr'])
+
+# Use in training
+from rm_optimizer.training import RewardModelLightning
+
+class CustomLightning(RewardModelLightning):
+    def _create_optimizer(self, params):
+        if self.optimizer_name == "custom":
+            return CustomOptimizer(params, lr=self.learning_rate)
+        return super()._create_optimizer(params)
+```
+
+### 15.2 Custom Acquisition Function
+
+```python
+from rm_optimizer.data_efficiency import AcquisitionFunction
+
+class DiversitySampling(AcquisitionFunction):
+    """Select diverse samples based on embedding distance."""
+    
+    def __init__(self, encoder):
+        self.encoder = encoder
+    
+    def score(self, pairs, model_or_ensemble):
+        embeddings = []
+        for pair in pairs:
+            emb = self.encoder.encode(pair.prompt)
+            embeddings.append(emb)
+        
+        # Compute pairwise distances
+        embeddings = np.array(embeddings)
+        distances = np.min(
+            cdist(embeddings, embeddings) + np.eye(len(embeddings)) * 1e10,
+            axis=1
+        )
+        return distances
+
+# Use with ActiveLearner
+from rm_optimizer.data_efficiency import ActiveLearner
+learner = ActiveLearner(ensemble, acquisition_fn=DiversitySampling(encoder))
+```
+
+### 15.3 Distributed Training (Multi-GPU)
+
+```python
+import pytorch_lightning as pl
+
+# Multi-GPU trainer
+trainer = pl.Trainer(
+    accelerator='gpu',
+    devices=4,              # Use 4 GPUs
+    strategy='ddp',         # Distributed Data Parallel
+    precision='bf16-mixed',
+)
+
+# Or with DeepSpeed
+trainer = pl.Trainer(
+    accelerator='gpu',
+    devices=4,
+    strategy='deepspeed_stage_2',  # ZeRO Stage 2
+    precision='bf16-mixed',
+)
+```
+
+### 15.4 Programmatic Experiment
+
+```python
+from rm_optimizer.core import BradleyTerryRM, download_dataset
+from rm_optimizer.training import train_reward_model
+from rm_optimizer.landscape import HessianAnalyzer, OptimizerComparison
+from rm_optimizer.rl_coupling import RLReadinessScorer
+
+# 1. Prepare data
+data_path = download_dataset("hh-rlhf", max_samples=10000)
+
+# 2. Run comparison
+comparison = OptimizerComparison(
+    model_name="microsoft/deberta-v3-large",
+    data_path=data_path,
+    optimizers=["adamw", "muon", "lion"],
+    num_seeds=3,
+    epochs=5
+)
+comparison.run_experiment()
+
+# 3. Analyze best model
+best_result = max(comparison.results["muon"], key=lambda x: x.final_val_accuracy)
+model = BradleyTerryRM.from_pretrained(best_result.checkpoint_path)
+
+# 4. Hessian analysis
+analyzer = HessianAnalyzer(model)
+spectrum = analyzer.compute_spectrum(dataloader, top_k=50)
+
+# 5. RL-readiness check
+scorer = RLReadinessScorer()
+report = scorer.compute_score(
+    accuracy=best_result.final_val_accuracy,
+    ece=best_result.calibration_ece,
+    top_eigenvalue=spectrum.eigenvalues[0]
+)
+print(report)
+```
+
+---
+
+## 16. Best Practices
+
+### 16.1 Training Recommendations
+
+| Aspect | Recommendation | Why |
+|--------|----------------|-----|
+| **Batch size** | 32-128 (H100) | Utilizes memory bandwidth |
+| **Learning rate** | 1e-5 to 5e-5 | Standard for fine-tuning |
+| **Epochs** | 3-5 | Avoid overfitting |
+| **Optimizer** | Muon or AdamW | Best accuracy/landscape |
+| **Precision** | BF16 | 2x speed, same quality |
+| **Warmup** | 100-500 steps | Stable early training |
+
+### 16.2 Hessian Analysis Tips
+
+```python
+# Good practices
+analyzer.compute_spectrum(
+    dataloader,
+    method="pyhessian",    # Most stable
+    top_k=20,              # Usually sufficient
+    trace_samples=100      # Balance speed/accuracy
+)
+
+# Reduce memory for large models
+analyzer = HessianAnalyzer(model, hvp_batch_size=8)  # Lower batch
+```
+
+### 16.3 Active Learning Strategy
+
+1. **Start small**: 1K seed samples
+2. **Query in batches**: 100-500 per round
+3. **Use ensemble**: 3-5 models for uncertainty
+4. **Stop when**: Accuracy plateaus or budget exhausted
+
+### 16.4 RL-Readiness Thresholds
+
+| Score | Status | Action |
+|-------|--------|--------|
+| > 0.8 | ✅ Ready | Proceed to RL training |
+| 0.6-0.8 | ⚠️ Caution | Monitor closely, consider improvements |
+| < 0.6 | ❌ Not Ready | Retrain, add data, or adjust hyperparameters |
+
+---
+
+## Appendix A: File Reference
 
 | File | Lines | Description |
 |------|-------|-------------|
 | `core/base.py` | ~250 | PreferencePair, BaseRewardModel |
-| `core/reward_model.py` | ~270 | BradleyTerryRM |
-| `core/data_loader.py` | ~250 | Dataset, Ray Data |
-| `training/lightning_module.py` | ~300 | Lightning wrapper |
+| `core/reward_model.py` | ~270 | BradleyTerryRM implementation |
+| `core/data_loader.py` | ~250 | Dataset, Ray Data integration |
+| `core/datasets.py` | ~300 | Dataset download utilities |
+| `training/lightning_module.py` | ~300 | Lightning training wrapper |
 | `training/callbacks.py` | ~200 | Hessian, calibration callbacks |
-| `landscape/hessian.py` | ~350 | HessianAnalyzer |
+| `landscape/hessian.py` | ~350 | HessianAnalyzer, power iteration |
 | `landscape/optimizer_comparison.py` | ~200 | Comparison framework |
+| `landscape/visualization.py` | ~200 | Plotting utilities |
 | `rl_coupling/ensemble.py` | ~150 | RewardModelEnsemble |
+| `rl_coupling/policy_simulation.py` | ~200 | Best-of-N with vLLM |
 | `rl_coupling/rl_readiness.py` | ~200 | RLReadinessScorer |
-| `data_efficiency/active_learning.py` | ~250 | Active learner |
-| `interfaces/cli.py` | ~200 | Typer CLI |
+| `data_efficiency/active_learning.py` | ~250 | Active learner + acquisitions |
+| `data_efficiency/margin_analysis.py` | ~150 | Curriculum sampling |
+| `interfaces/cli.py` | ~250 | Typer CLI |
 
-**Total: ~2,500 lines of code**
+**Total: ~3,500 lines of code**
+
+---
+
+## Appendix B: Configuration Reference
+
+### Main Config (config.yaml)
+
+```yaml
+defaults:
+  - hardware: h100
+  - model: deberta
+  - optimizer: adamw
+  - data: preference
+
+training:
+  epochs: 5
+  batch_size: ${hardware.batch_sizes.${model.name}}
+  learning_rate: 1e-5
+  warmup_steps: 100
+  gradient_clip: 1.0
+
+experiment:
+  seed: 42
+  name: rm_training
+  output_dir: outputs/${experiment.name}
+```
+
+### Hardware Configs
+
+```yaml
+# h100.yaml
+device: cuda:0
+precision: bf16-mixed
+compile_model: true
+flash_attention: true
+batch_sizes:
+  deberta: 128
+  llama_7b: 32
+
+# a100.yaml  
+device: cuda:0
+precision: 16-mixed
+compile_model: true
+flash_attention: true
+batch_sizes:
+  deberta: 64
+  llama_7b: 16
+```
+
+---
+
+## Appendix C: API Quick Reference
+
+```python
+# Core
+from rm_optimizer.core import (
+    BradleyTerryRM,           # Reward model
+    PreferencePair,           # Data structure
+    download_dataset,         # Get datasets
+    create_dataloader,        # DataLoader factory
+)
+
+# Training
+from rm_optimizer.training import (
+    RewardModelLightning,     # Lightning module
+    train_reward_model,       # High-level training
+    HessianCallback,          # Real-time Hessian
+)
+
+# Landscape
+from rm_optimizer.landscape import (
+    HessianAnalyzer,          # Compute eigenspectrum
+    OptimizerComparison,      # Compare optimizers
+    plot_eigenvalue_distribution,
+)
+
+# RL Coupling
+from rm_optimizer.rl_coupling import (
+    RewardModelEnsemble,      # Uncertainty via ensemble
+    BestOfNSampler,           # Policy simulation
+    RLReadinessScorer,        # Readiness check
+)
+
+# Data Efficiency
+from rm_optimizer.data_efficiency import (
+    ActiveLearner,            # Active learning loop
+    UncertaintySampling,      # Acquisition function
+    CurriculumSampler,        # Margin-based sampling
+)
+```
 
 ---
 
 *Document generated for RM-Optimizer v0.1.0*
+*Last updated: 2026-01-18*
