@@ -1,0 +1,21 @@
+# Preference Data Configuration
+name: preference
+path: data/preference_pairs.parquet
+format: parquet  # parquet, json, huggingface
+
+# Column names
+columns:
+  prompt: prompt
+  chosen: chosen
+  rejected: rejected
+  margin: margin  # Optional ground truth
+
+# Splits
+train_split: 0.8
+val_split: 0.1
+test_split: 0.1
+
+# Preprocessing
+max_length: ${model.max_length}
+truncation: true
+padding: max_length

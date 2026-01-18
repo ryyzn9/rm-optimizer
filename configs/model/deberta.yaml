@@ -1,0 +1,7 @@
+# DeBERTa-v3-large Model Configuration
+name: deberta
+model_id: microsoft/deberta-v3-large
+hidden_size: 1024
+num_layers: 24
+max_length: 512
+num_labels: 1  # Scalar reward output

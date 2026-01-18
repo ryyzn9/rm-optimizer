@@ -1,0 +1,105 @@
+[project]
+name = "rm-optimizer"
+version = "0.1.0"
+description = "Research framework for reward model analysis through loss landscape geometry, RL coupling dynamics, and data efficiency metrics"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "RM-Optimizer Team"}
+]
+keywords = ["reward-model", "rlhf", "hessian", "loss-landscape", "active-learning"]
+
+dependencies = [
+    # Core ML
+    "torch>=2.2.0",
+    "transformers>=4.38.0",
+    "datasets>=2.17.0",
+    "tokenizers>=0.15.0",
+    
+    # H100 Optimizations
+    "flash-attn>=2.5.0",
+    "bitsandbytes>=0.42.0",
+    
+    # Training
+    "pytorch-lightning>=2.1.0",
+    "torchmetrics>=1.3.0",
+    
+    # Data Pipeline (Ray)
+    "ray[default]>=2.9.0",
+    
+    # Inference (vLLM)
+    "vllm>=0.3.0",
+    
+    # Hessian Analysis
+    "pyhessian>=0.1.0",
+    
+    # Scientific Computing
+    "scipy>=1.12.0",
+    "numpy>=1.26.0",
+    "pandas>=2.2.0",
+    "scikit-learn>=1.4.0",
+    
+    # Configuration
+    "hydra-core>=1.3.0",
+    "omegaconf>=2.3.0",
+    
+    # Experiment Tracking
+    "wandb>=0.16.0",
+    
+    # Visualization
+    "matplotlib>=3.8.0",
+    "seaborn>=0.13.0",
+    "plotly>=5.18.0",
+    
+    # Dashboard
+    "streamlit>=1.31.0",
+    
+    # CLI
+    "typer>=0.9.0",
+    "rich>=13.7.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-asyncio>=0.23.0",
+    "mypy>=1.8.0",
+    "black>=24.1.0",
+    "ruff>=0.1.0",
+    "ipython>=8.20.0",
+    "jupyter>=1.0.0",
+    "ipdb>=0.13.0",
+]
+
+[project.scripts]
+rm-opt = "rm_optimizer.interfaces.cli:app"
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rm_optimizer*"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310", "py311", "py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v --cov=rm_optimizer --cov-report=term-missing"

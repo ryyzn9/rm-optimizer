@@ -1,0 +1,6 @@
+# Lion Optimizer Configuration
+# Memory-efficient optimizer from Google
+name: lion
+lr: 1e-6  # Lion uses 10x smaller LR than Adam
+betas: [0.9, 0.99]
+weight_decay: 0.1

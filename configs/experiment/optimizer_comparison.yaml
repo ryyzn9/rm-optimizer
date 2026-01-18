@@ -1,0 +1,32 @@
+# Optimizer Comparison Experiment Configuration
+defaults:
+  - /config
+
+experiment:
+  name: optimizer_comparison
+  description: Compare optimizer effects on RM quality and loss landscape
+
+# Optimizers to compare
+optimizers_to_test:
+  - adam
+  - adamw
+  - sgd
+  - muon
+  - lion
+
+# Number of seeds for statistical significance
+num_seeds: 3
+
+# Metrics to compute
+metrics:
+  - accuracy
+  - calibration_ece
+  - calibration_brier
+  - hessian_top_eigenvalue
+  - hessian_trace
+  - hessian_condition_number
+  - rl_readiness_score
+
+# Output
+save_results: true
+results_path: outputs/optimizer_comparison/

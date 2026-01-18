@@ -1,0 +1,55 @@
+# Main Hydra configuration
+defaults:
+  - hardware: h100
+  - model: deberta
+  - optimizer: adamw
+  - data: preference
+  - _self_
+
+# General settings
+seed: 42
+project_name: rm-optimizer
+experiment_name: ${model.name}_${optimizer.name}
+
+# Training
+training:
+  epochs: 5
+  batch_size: ${hardware.batch_sizes.${model.name}}
+  gradient_clip: 1.0
+  warmup_steps: 100
+  max_steps: 10000
+  val_check_interval: 0.25
+  log_every_n_steps: 10
+
+# Hessian analysis
+hessian:
+  enabled: true
+  top_k_eigenvalues: 50
+  trace_samples: 100
+  compute_every_n_epochs: 1
+
+# RL coupling
+rl_coupling:
+  enabled: true
+  ensemble_size: 3
+  bon_samples: 16
+  variance_threshold: 0.5
+
+# Data efficiency
+data_efficiency:
+  active_learning: false
+  acquisition_function: uncertainty
+  batch_size: 100
+
+# Logging
+logging:
+  wandb:
+    enabled: true
+    project: ${project_name}
+    name: ${experiment_name}
+  
+# Paths
+paths:
+  data_dir: data/
+  checkpoint_dir: checkpoints/
+  output_dir: outputs/

@@ -1,0 +1,25 @@
+# H100 80GB Hardware Configuration
+device: cuda:0
+precision: bf16-mixed
+compile_model: true
+flash_attention: true
+
+# Optimal batch sizes by model size
+batch_sizes:
+  deberta: 128      # DeBERTa-v3-large (355M)
+  llama_7b: 32      # Llama 7B
+  llama_13b: 16     # Llama 13B (with gradient checkpointing)
+
+# Memory optimization
+gradient_checkpointing: true
+use_8bit_adam: false  # Enable for 13B+ models
+pin_memory: true
+num_workers: 8
+
+# CUDA settings
+cudnn_benchmark: true
+tf32_enabled: true
+
+# H100-specific
+tensor_cores: true
+memory_efficient_attention: true
