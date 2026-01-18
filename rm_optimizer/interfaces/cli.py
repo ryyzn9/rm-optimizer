@@ -297,6 +297,47 @@ def info():
     console.print(table)
 
 
+@app.command()
+def download(
+    dataset: str = typer.Argument(
+        "hh-rlhf",
+        help="Dataset name: hh-rlhf, ultrafeedback, shp, helpsteer"
+    ),
+    output_dir: str = typer.Option(
+        "data",
+        "--output", "-o",
+        help="Output directory"
+    ),
+    max_samples: Optional[int] = typer.Option(
+        None,
+        "--max-samples", "-n",
+        help="Maximum samples to download (None for all)"
+    ),
+    format: str = typer.Option(
+        "parquet",
+        "--format", "-f",
+        help="Output format: parquet, json, csv"
+    )
+):
+    """Download a preference dataset."""
+    from rm_optimizer.core.datasets import download_dataset, list_datasets
+    
+    if dataset == "list":
+        list_datasets()
+        return
+    
+    console.print(f"\n[bold blue]Downloading {dataset}...[/bold blue]")
+    
+    path = download_dataset(
+        name=dataset,
+        output_dir=output_dir,
+        max_samples=max_samples,
+        format=format
+    )
+    
+    console.print(f"\n[green]✓ Dataset saved to: {path}[/green]")
+
+
 @app.callback()
 def main():
     """
